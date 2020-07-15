@@ -39,6 +39,11 @@ __thread struct kthread *mykthread;
 /* Map of cpu to kthread */
 struct cpu_record cpu_map[NCPU] __attribute__((aligned(CACHE_LINE_SIZE)));
 
+/**
+ * allock - allocates a kthread from the heap and initializes the state
+ *
+ * Returns a pointer to the new kthread.
+ */
 static struct kthread *allock(void)
 {
 	struct kthread *k;

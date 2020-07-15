@@ -12,9 +12,10 @@
 #include <base/assert.h>
 #include <base/atomic.h>
 
+/* LRPC message format */
 struct lrpc_msg {
-	uint64_t	cmd;
-	unsigned long	payload;
+	uint64_t	cmd;            /* command */
+	unsigned long	payload;    /* payload: an integer or pointer */
 };
 
 #define LRPC_DONE_PARITY	(1UL << 63)
@@ -23,15 +24,19 @@ struct lrpc_msg {
 
 /*
  * Egress Channel Support
+ *
+ * The core data structure of an egress channel is a circular buffer.
+ * This struct only holds the metadata of the egress channel; the circular
+ * buffer is owned somewhere else.
  */
 
 struct lrpc_chan_out {
-	struct lrpc_msg	*tbl;
-	uint32_t	*recv_head_wb;
-	uint32_t	send_head;
-	uint32_t	send_tail;
-	uint32_t	size;
-	uint32_t	pad;
+	struct lrpc_msg	*tbl;       /* circular buffer holding outgoing lrpc msgs */
+	uint32_t	*recv_head_wb;  /* next slot to dequeue a msg by the receiver */
+	uint32_t	send_head;      /* next slot to enqueue a msg by the sender */
+	uint32_t	send_tail;      /* cache of @recv_head_wb (often outdated) */
+	uint32_t	size;           /* # slots in @tbl; must be power of two */
+	uint32_t	pad;            /* pad to 4 cache lines */
 };
 
 extern bool __lrpc_send(struct lrpc_chan_out *chan, uint64_t cmd,

@@ -42,10 +42,17 @@
  */
 
 /*
- * See the "System V Application Binary Interface" for a full explation of
+ * See the "System V Application Binary Interface" for a full explanation of
  * calling and argument passing conventions.
  */
 
+/**
+ * Trap frame of a user thread.
+ *
+ * Used to save the CPU state of a user thread so it can be switched out.
+ * The usage of different registers are documented in Figure 3.4 Register Usage
+ * of https://uclibc.org/docs/psABI-x86_64.pdf.
+ */
 struct thread_tf {
 	/* argument registers, can be clobbered by callee */
 	uint64_t rdi; /* first argument */
@@ -54,6 +61,8 @@ struct thread_tf {
 	uint64_t rcx;
 	uint64_t r8;
 	uint64_t r9;
+
+	/* temporary registers, can be clobbered by callee */
 	uint64_t r10;
 	uint64_t r11;
 
@@ -91,18 +100,31 @@ enum {
 
 struct stack;
 
+/* user thread */
 struct thread {
-	struct thread_tf	tf;
-	struct list_node	link;
-	struct stack		*stack;
-	unsigned int		main_thread:1;
-	unsigned int		state;
-	unsigned int		stack_busy;
+	struct thread_tf	tf;             /* trap frame */
+	struct list_node	link;           /* used to chain uthread in a list */
+	struct stack		*stack;         /* stack; obtained from tcache */
+	unsigned int		main_thread:1;  /* main uthread of the app? */
+	unsigned int		state;          /* running, runnable, or sleeping */
+	unsigned int		stack_busy;     /* is stack still being used? see
+                                         * @jmp_thread_* for more details */
 };
 
 typedef void (*runtime_fn_t)(void);
 
-/* assembly helper routines from switch.S */
+/** assembly helper routines from switch.S
+ *
+ * Based on the source and target of the context switch, three variants are
+ * provided to cover the following cases:
+ * @__jmp_thread: runtime -> uthread
+ * @__jmp_thread_direct: uthread -> uthread
+ * @__jmp_runtime: uthread -> runtime
+ *
+ * In addition, a special @__jump_runtime_nosave routine optimizes the case
+ * where the caller's state can be simply dropped when switching to the runtime
+ * (because we will never switch back to the caller).
+ */
 extern void __jmp_thread(struct thread_tf *tf) __noreturn;
 extern void __jmp_thread_direct(struct thread_tf *oldtf,
 				struct thread_tf *newtf,
@@ -119,6 +141,7 @@ extern void __jmp_runtime_nosave(runtime_fn_t fn, void *stack) __noreturn;
 #define STACK_PTR_SIZE	(RUNTIME_STACK_SIZE / sizeof(uintptr_t))
 #define GUARD_PTR_SIZE	(RUNTIME_GUARD_SIZE / sizeof(uintptr_t))
 
+/* stack of a uthread */
 struct stack {
 	uintptr_t	usable[STACK_PTR_SIZE];
 	uintptr_t	guard[GUARD_PTR_SIZE]; /* unreadable and unwritable */
@@ -271,11 +294,11 @@ struct kthread {
 	/* 1st cache-line */
 	spinlock_t		lock;
 	uint32_t		generation;
-	uint32_t		rq_head;
-	uint32_t		rq_tail;
-	struct list_head	rq_overflow;
-	struct lrpc_chan_in	rxq;
-	int			park_efd;
+	uint32_t		rq_head;    /* head of the runqueue */
+	uint32_t		rq_tail;    /* tail of the runqueue */
+	struct list_head	rq_overflow;    /* additional runqueue entries */
+	struct lrpc_chan_in	rxq;    /* ingress packet queue */
+	int			park_efd;       /* event fd for parking itself */
 	unsigned int		parked:1;
 	unsigned int		detached:1;
 
@@ -289,11 +312,12 @@ struct kthread {
 	unsigned long		pad1[1];
 
 	/* 3rd cache-line */
-	struct lrpc_chan_out	txpktq;
-	struct lrpc_chan_out	txcmdq;
+    /* see inc/iokernel/queue.h for more info on these queues */
+	struct lrpc_chan_out	txpktq; /* egress packet queue */
+	struct lrpc_chan_out	txcmdq; /* egress command queue */
 
 	/* 4th-7th cache-line */
-	thread_t		*rq[RUNTIME_RQ_SIZE];
+	thread_t        *rq[RUNTIME_RQ_SIZE];   /* queue of runnable uthreads */
 
 	/* 8th cache-line */
 	spinlock_t		timer_lock;

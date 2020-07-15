@@ -9,6 +9,14 @@
 #include "defs.h"
 #include "net/defs.h"
 
+/* a number of softirq events packed into a struct
+ *
+ * There are 4 types of event:
+ * - completion of egress packets
+ * - arrival of ingress packets
+ * - timer expiration
+ * - kthread detachment
+ */
 struct softirq_work {
 	unsigned int recv_cnt, compl_cnt, join_cnt, timer_budget;
 	struct kthread *k;
@@ -17,6 +25,10 @@ struct softirq_work {
 	struct kthread *join_reqs[SOFTIRQ_MAX_BUDGET];
 };
 
+/**
+ * softirq_fn - handles a number of softirq events
+ * @arg: a pointer to @softirq_work
+ */
 static void softirq_fn(void *arg)
 {
 	struct softirq_work *w = arg;
@@ -38,6 +50,12 @@ static void softirq_fn(void *arg)
 		join_kthread(w->join_reqs[i]);
 }
 
+/**
+ * softirq_gather_work - packs a number of softirq events into a @softirq_work
+ * @w: the @softirq_work to initialize
+ * @k: the kthread from which to take RX queue commands
+ * @budget: the maximum number of events to pack
+ */
 static void softirq_gather_work(struct softirq_work *w, struct kthread *k,
 				unsigned int budget)
 {

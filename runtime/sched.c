@@ -19,12 +19,19 @@
 
 #include "defs.h"
 
-/* the current running thread, or NULL if there isn't one */
+/* the current running uthread, or NULL if there isn't one */
 __thread thread_t *__self;
 /* a pointer to the top of the per-kthread (TLS) runtime stack */
 static __thread void *runtime_stack;
 /* a pointer to the bottom of the per-kthread (TLS) runtime stack */
 static __thread void *runtime_stack_base;
+
+/*
+ * Watchdog support
+ *
+ * Watchdog is a mechanism to make sure high-priority periodic tasks
+ * (e.g., network processing) get to execute from time to time.
+ */
 
 /* Flag to prevent watchdog from running */
 bool disable_watchdog;
@@ -61,7 +68,9 @@ static __noreturn void jmp_thread(thread_t *th)
 	__self = th;
 	th->state = THREAD_STATE_RUNNING;
 	if (unlikely(load_acquire(&th->stack_busy))) {
-		/* wait until the scheduler finishes switching stacks */
+	    /* @th might be stolen from another CPU where the scheduler is still
+	     * running with @th's stack (see @thread_yield for an example); wait
+	     * until the scheduler finishes switching stacks */
 		while (load_acquire(&th->stack_busy))
 			cpu_relax();
 	}
@@ -84,7 +93,9 @@ static void jmp_thread_direct(thread_t *oldth, thread_t *newth)
 	__self = newth;
 	newth->state = THREAD_STATE_RUNNING;
 	if (unlikely(load_acquire(&newth->stack_busy))) {
-		/* wait until the scheduler finishes switching stacks */
+        /* @th might be stolen from another CPU where the scheduler is still
+         * running with @th's stack (see @thread_yield for an example); wait
+         * until the scheduler finishes switching stacks */
 		while (load_acquire(&newth->stack_busy))
 			cpu_relax();
 	}
@@ -121,6 +132,10 @@ static __noreturn void jmp_runtime_nosave(runtime_fn_t fn)
 	__jmp_runtime_nosave(fn, runtime_stack);
 }
 
+/**
+ * drain_overflow - moves tasks from a kthread's overflow list to its runqueue
+ * @l: the kthread whose runqueue overflowed
+ */
 static void drain_overflow(struct kthread *l)
 {
 	thread_t *th;
@@ -136,6 +151,13 @@ static void drain_overflow(struct kthread *l)
 	}
 }
 
+/**
+ * steal_work - steals work from another thread's runqueue
+ * @l: the local thread that runs out of work to do
+ * @r: the remote thread to steal from
+ *
+ * Returns true if some work is stolen successfully.
+ */
 static bool steal_work(struct kthread *l, struct kthread *r)
 {
 	thread_t *th;
@@ -198,6 +220,13 @@ done:
 	return th != NULL;
 }
 
+/**
+ * do_watchdog - creates a closure for watchdog tasks
+ * @l: the current kthread
+ *
+ * Returns a thread that performs watchdog tasks when executed or
+ * NULL if no task is available.
+ */
 static __noinline struct thread *do_watchdog(struct kthread *l)
 {
 	thread_t *th;
@@ -260,6 +289,7 @@ static __noreturn __noinline void schedule(void)
 	if (unlikely(!list_empty(&l->rq_overflow)))
 		drain_overflow(l);
 
+	/* the following code section loops until a runnable uthread is found */
 again:
 	/* first try the local runqueue */
 	if (l->rq_head != l->rq_tail)
@@ -307,6 +337,7 @@ again:
 
 	goto again;
 
+	/* we've found the next uthread to run */
 done:
 	/* pop off a thread and run it */
 	if (!th) {
@@ -463,6 +494,9 @@ void thread_yield(void)
 	preempt_disable();
 	assert(myth->state == THREAD_STATE_RUNNING);
 	myth->state = THREAD_STATE_SLEEPING;
+	/* mark the stack as being used since this uthread can be stolen once
+	 * it's marked as runnable by @thread_ready; the flag will be cleared
+	 * once the scheduler finishes switching stacks */
 	store_release(&myth->stack_busy, true);
 	thread_ready(myth);
 
@@ -500,6 +534,12 @@ void thread_ready(thread_t *th)
 	putk();
 }
 
+/**
+ * thread_finish_yield_kthread - yields the running uthread and relinquishes
+ * the core (i.e. parks the kthread)
+ *
+ * Extracted as a function so it can be passed to jmp_runtime.
+ */
 static void thread_finish_yield_kthread(void)
 {
 	struct kthread *k = myk();

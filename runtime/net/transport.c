@@ -11,6 +11,7 @@
 
 #include "defs.h"
 
+/* size of the transport socket (hash)table */
 #define TRANS_TBL_SIZE	16384
 
 /* ephemeral port definitions (IANA suggested range) */
@@ -40,6 +41,7 @@ static inline uint32_t trans_hash_5tuple(uint8_t proto, struct netaddr laddr,
 }
 
 static DEFINE_SPINLOCK(trans_lock);
+/* transport socket (hash)table; each entry is an RCU list */
 static struct rcu_hlist_head trans_tbl[TRANS_TBL_SIZE];
 
 /**
@@ -145,6 +147,12 @@ struct l4_hdr {
 	uint16_t sport, dport;
 };
 
+/**
+ * trans_lookup - finds the target socket (i.e., recipient) of an ingress packet
+ * @m: the ingress packet
+ *
+ * Returns a transport entry if successful or NULL if no match is found.
+ */
 static struct trans_entry *trans_lookup(struct mbuf *m)
 {
 	const struct ip_hdr *iphdr;

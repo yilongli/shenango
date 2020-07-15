@@ -126,6 +126,13 @@ void net_error(struct mbuf *m, int err)
 		trans_error(m, err);
 }
 
+/**
+ * net_rx_one - receives one network packet; handles the packet directly
+ * if it's below the transport layer (L4)
+ * @hdr: the header of the ingress packet
+ *
+ * Returns a L4 packet or NULL if the packet is below L4.
+ */
 static struct mbuf *net_rx_one(struct rx_net_hdr *hdr)
 {
 	struct mbuf *m;

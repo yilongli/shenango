@@ -39,24 +39,25 @@ static int udp_send_raw(struct mbuf *m, size_t len,
  * UDP Socket Support
  */
 
+/* udp socket */
 struct udpconn {
-	struct trans_entry	e;
-	bool			shutdown;
+	struct trans_entry	e;      /* entry in the global socket table */
+	bool			shutdown;   /* socket shutdown? */
 
 	/* ingress support */
-	spinlock_t		inq_lock;
-	int			inq_cap;
-	int			inq_len;
-	int			inq_err;
-	waitq_t			inq_wq;
-	struct mbufq		inq;
+	spinlock_t		inq_lock;   /* protects ingress queue */
+	int			inq_cap;        /* ingress queue capacity */
+	int			inq_len;        /* size of the ingress queue */
+	int			inq_err;        /* error status */
+	waitq_t			inq_wq;     /* condition var: ingress data available? */
+	struct mbufq		inq;    /* ingress queue (ie. a linked-list of mbufs) */
 
 	/* egress support */
-	spinlock_t		outq_lock;
-	bool			outq_free;
-	int			outq_cap;
-	int			outq_len;
-	waitq_t			outq_wq;
+	spinlock_t		outq_lock;  /* protects egress queue */
+	bool			outq_free;  /* egress queue closed? */
+	int			outq_cap;       /* egress queue capacity */
+	int			outq_len;       /* size of the egress queue */
+	waitq_t			outq_wq;    /* condition var: egress queue not full? */
 };
 
 /* handles ingress packets for UDP sockets */

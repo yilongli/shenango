@@ -115,18 +115,20 @@ struct trans_ops {
 	void (*err) (struct trans_entry *e, int err);
 };
 
+/* transport-layer entry (aka. TCP/UDP socket table entry) */
 struct trans_entry {
-	int			match;
-	uint8_t			proto;
-	struct netaddr		laddr;
-	struct netaddr		raddr;
+	int			match;          /* 3-tuple match or 5-tuple match */
+	uint8_t			proto;      /* tcp or udp? */
+	struct netaddr		laddr;  /* local address */
+	struct netaddr		raddr;  /* remote address */
 	struct rcu_hlist_node	link;
 	struct rcu_head		rcu;
 	const struct trans_ops	*ops;
 };
 
 /**
- * trans_init_3tuple - initializes a transport layer entry (3-tuple match)
+ * trans_init_3tuple - initializes a transport layer entry (3-tuple match);
+ * used in passive open operations (e.g., @udp_listen, @tcp_listen)
  * @e: the entry to initialize
  * @proto: the IP protocol
  * @ops: operations to handle matching flows
@@ -143,7 +145,8 @@ static inline void trans_init_3tuple(struct trans_entry *e, uint8_t proto,
 }
 
 /**
- * trans_init_5tuple - initializes a transport layer entry (5-tuple match)
+ * trans_init_5tuple - initializes a transport layer entry (5-tuple match);
+ * used in active open operations (e.g., @udp_dial, @tcp_conn_attach)
  * @e: the entry to initialize
  * @proto: the IP protocol
  * @ops: operations to handle matching flows
