@@ -1,0 +1,185 @@
+cmake_minimum_required(VERSION 3.15)
+project(shenango)
+
+set(CMAKE_CXX_STANDARD 14)
+
+#include_directories(apps/bench)
+#include_directories(base)
+#include_directories(bindings/cc)
+#include_directories(bindings/rust)
+include_directories(inc)
+#include_directories(inc/asm)
+#include_directories(inc/base)
+#include_directories(inc/iokernel)
+#include_directories(inc/net)
+#include_directories(inc/runtime)
+#include_directories(iokernel)
+#include_directories(ksched)
+#include_directories(runtime)
+#include_directories(runtime/net)
+include_directories(/lib/modules/4.15.0-109-generic/build/include)
+include_directories(/usr/src/linux-headers-4.15.0-109/arch/x86/include/)
+
+add_executable(shenango
+        apps/bench/callibrate.cc
+        apps/bench/efficiency.cc
+        apps/bench/efficiency_linux.cc
+        apps/bench/fake_worker.cc
+        apps/bench/fake_worker.h
+        apps/bench/linux_mech_bench.cc
+        apps/bench/netbench.cc
+        apps/bench/netbench2.cc
+        apps/bench/netbench_linux.cc
+        apps/bench/netbench_udp.cc
+        apps/bench/netperf.cc
+        apps/bench/proto.h
+        apps/bench/stress.cc
+        apps/bench/stress_linux.cpp
+        apps/bench/tbench.cc
+        apps/dpdk_netperf/dpdk_netperf.c
+        base/bitmap.c
+        base/cpu.c
+        base/init.c
+        base/init_internal.h
+        base/jenkins_hash.c
+        base/list.c
+        base/log.c
+        base/lrpc.c
+        base/mem.c
+        base/mempool.c
+        base/page.c
+        base/pci.c
+        base/slab.c
+        base/stat.c
+        base/sysfs.c
+        base/tcache.c
+        base/thread.c
+        base/time.c
+        bindings/cc/macros.h
+        bindings/cc/net.h
+        bindings/cc/sync.h
+        bindings/cc/test.cc
+        bindings/cc/thread.cc
+        bindings/cc/thread.h
+        bindings/cc/timer.h
+        bindings/rust/shenango.h
+        inc/asm/atomic.h
+        inc/asm/chksum.h
+        inc/asm/cpu.h
+        inc/asm/ops.h
+        inc/base/assert.h
+        inc/base/atomic.h
+        inc/base/bitmap.h
+        inc/base/byteorder.h
+        inc/base/compiler.h
+        inc/base/cpu.h
+        inc/base/gen.h
+        inc/base/hash.h
+        inc/base/init.h
+        inc/base/kref.h
+        inc/base/limits.h
+        inc/base/list.h
+        inc/base/lock.h
+        inc/base/log.h
+        inc/base/lrpc.h
+        inc/base/mem.h
+        inc/base/mempool.h
+        inc/base/page.h
+        inc/base/pci.h
+        inc/base/slab.h
+        inc/base/stat.h
+        inc/base/stddef.h
+        inc/base/sysfs.h
+        inc/base/tcache.h
+        inc/base/thread.h
+        inc/base/time.h
+        inc/base/types.h
+        inc/iokernel/control.h
+        inc/iokernel/queue.h
+        inc/iokernel/shm.h
+        inc/net/arp.h
+        inc/net/chksum.h
+        inc/net/ethernet.h
+        inc/net/icmp.h
+        inc/net/ip.h
+        inc/net/mbuf.h
+        inc/net/mbufq.h
+        inc/net/ping.h
+        inc/net/tcp.h
+        inc/net/udp.h
+        inc/runtime/net.h
+        inc/runtime/preempt.h
+        inc/runtime/rcu.h
+        inc/runtime/rculist.h
+        inc/runtime/smalloc.h
+        inc/runtime/sync.h
+        inc/runtime/tcp.h
+        inc/runtime/thread.h
+        inc/runtime/timer.h
+        inc/runtime/udp.h
+        iokernel/commands.c
+        iokernel/control.c
+        iokernel/cores.c
+        iokernel/defs.h
+        iokernel/dp_clients.c
+        iokernel/dpdk.c
+        iokernel/main.c
+        iokernel/mempool_completion.c
+        iokernel/mlx.h
+        iokernel/ref.h
+        iokernel/rx.c
+        iokernel/stat.c
+        iokernel/tx.c
+        ksched/ksched.c
+        ksched/ksched.h
+        net/mbuf.c
+        net/netdump.c
+        runtime/net/arp.c
+        runtime/net/core.c
+        runtime/net/defs.h
+        runtime/net/icmp.c
+        runtime/net/ping.c
+        runtime/net/tcp.c
+        runtime/net/tcp.h
+        runtime/net/tcp_debug.c
+        runtime/net/tcp_in.c
+        runtime/net/tcp_out.c
+        runtime/net/transport.c
+        runtime/net/udp.c
+        runtime/net/waitq.h
+        runtime/cfg.c
+        runtime/defs.h
+        runtime/init.c
+        runtime/ioqueues.c
+        runtime/kthread.c
+        runtime/preempt.c
+        runtime/rcu.c
+        runtime/sched.c
+        runtime/smalloc.c
+        runtime/softirq.c
+        runtime/stack.c
+        runtime/stat.c
+        runtime/sync.c
+        runtime/timer.c
+        scripts/cstate.c
+        scripts/spin.cc
+        shim/entry.c
+        shim/mem.c
+        shim/pthread.c
+        shim/sleep.c
+        shim/sync.c
+        tests/netperf.c
+        tests/test_base_gen.c
+        tests/test_base_hello.c
+        tests/test_base_lrpc.c
+        tests/test_base_thread.c
+        tests/test_kthread_attach.c
+        tests/test_kthread_wakeup.c
+        tests/test_many_threads.c
+        tests/test_multiple_runtimes.c
+        tests/test_ping.c
+        tests/test_runtime_mutexes.c
+        tests/test_runtime_rcu.c
+        tests/test_runtime_smalloc.c
+        tests/test_runtime_threads.c
+        tests/test_runtime_timer.c)
