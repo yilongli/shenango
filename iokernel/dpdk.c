@@ -185,7 +185,8 @@ int dpdk_init()
 	}
 
 	/* check that there is a port to send/receive on */
-	if (!rte_eth_dev_is_valid_port(0)) {
+    dp.port = 1;
+    if (!rte_eth_dev_is_valid_port(0)) {
 		log_err("dpdk: no available ports");
 		return -1;
 	}
@@ -202,7 +203,6 @@ int dpdk_init()
 int dpdk_late_init()
 {
 	/* initialize port */
-	dp.port = 0;
 	if (dpdk_port_init(dp.port, dp.rx_mbuf_pool) != 0) {
 		log_err("dpdk: cannot init port %"PRIu8 "\n", dp.port);
 		return -1;
