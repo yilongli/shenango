@@ -19,6 +19,7 @@ include_directories(inc)
 #include_directories(runtime/net)
 include_directories(/lib/modules/4.15.0-109-generic/build/include)
 include_directories(/usr/src/linux-headers-4.15.0-109/arch/x86/include/)
+include_directories(/usr/include/dpdk/)
 
 add_executable(shenango
         apps/bench/callibrate.cc
@@ -137,6 +138,7 @@ add_executable(shenango
         runtime/net/arp.c
         runtime/net/core.c
         runtime/net/defs.h
+        runtime/net/homa.c
         runtime/net/icmp.c
         runtime/net/ping.c
         runtime/net/tcp.c

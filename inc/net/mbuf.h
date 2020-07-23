@@ -18,7 +18,12 @@
 #define MBUF_DEFAULT_LEN	2048
 #define MBUF_DEFAULT_HEADROOM	128
 
-
+/* memory buffer used to hold egress or ingress network packet
+ *
+ * This struct contains the metadata of the corresponding packet; it's always
+ * placed at the beginning of each backing buffer (see runtime/net/core.c for
+ * details).
+ */
 struct mbuf {
 	struct mbuf	*next;	   /* the next mbuf in the mbufq */
 	unsigned char	*head;	   /* start of the buffer */

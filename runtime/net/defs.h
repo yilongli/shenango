@@ -118,7 +118,7 @@ struct trans_ops {
 /* transport-layer entry (aka. TCP/UDP socket table entry) */
 struct trans_entry {
 	int			match;          /* 3-tuple match or 5-tuple match */
-	uint8_t			proto;      /* tcp or udp? */
+	uint8_t			proto;      /* transport protocol */
 	struct netaddr		laddr;  /* local address */
 	struct netaddr		raddr;  /* remote address */
 	struct rcu_hlist_node	link;

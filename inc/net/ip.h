@@ -343,6 +343,7 @@ struct ip_pseudo {
 #define	IPPROTO_CARP		112		/* CARP */
 #define	IPPROTO_PGM		113		/* PGM */
 #define	IPPROTO_MPLS		137		/* MPLS-in-IP */
+#define	IPPROTO_HOMA		144		/* Homa protocol */
 #define	IPPROTO_PFSYNC		240		/* PFSYNC */
 #define	IPPROTO_RESERVED_253	253		/* Reserved */
 #define	IPPROTO_RESERVED_254	254		/* Reserved */
