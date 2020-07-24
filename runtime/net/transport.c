@@ -8,6 +8,11 @@
 #include <runtime/sync.h>
 #include <runtime/net.h>
 #include <net/ip.h>
+#include <base/log.h>
+
+// FIXME: use <...> instead of ""?
+//#include <Homa/Shenango.h>
+#include "../../homa/include/Homa/Shenango.h"
 
 #include "defs.h"
 
@@ -267,6 +272,10 @@ int trans_init(void)
 
 	for (i = 0; i < TRANS_TBL_SIZE; i++)
 		rcu_hlist_init_head(&trans_tbl[i]);
+
+	// TODO: create a dummy shim driver and invoke some simple function
+    void *shim_drv = homa_driver_create();
+    log_info("homa driver payload size %u", homa_driver_max_payload(shim_drv));
 
 	trans_seed = rand_crc32c(0x48FA8BC1 ^ iok.key);
 	return 0;

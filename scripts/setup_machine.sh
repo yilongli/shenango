@@ -13,4 +13,8 @@ for n in /sys/devices/system/node/node[1-9]; do
 	echo 0 > $n/hugepages/hugepages-2048kB/nr_hugepages
 done
 
-
+# Enabled hyperthreading by forcing all cores offline
+NUM_CPUS=$(lscpu | grep '^CPU(s):' | awk '{print $2}')
+for N in $(seq 0 $((NUM_CPUS-1))); do
+    echo 1 | tee /sys/devices/system/cpu/cpu$N/online
+done

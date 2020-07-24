@@ -1,3 +1,6 @@
 [submodule "dpdk"]
 	path = dpdk
 	url = http://dpdk.org/git/dpdk
+[submodule "homa"]
+	path = homa
+	url = https://github.com/yilongli/Homa.git

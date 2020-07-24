@@ -1,5 +1,6 @@
 DPDK_PATH = dpdk
-INC     = -I./inc -I$(DPDK_PATH)/build/include
+HOMA_PATH = homa
+INC     = -I./inc -I$(DPDK_PATH)/build/include -I$(HOMA_PATH)/include
 CFLAGS  = -g -Wall -std=gnu11 -D_GNU_SOURCE $(INC) -mssse3
 LDFLAGS = -T base/base.ld -no-pie
 LD	= gcc
@@ -80,6 +81,9 @@ DPDK_LIBS += -lrte_pmd_mlx4 -libverbs -lmlx4
 endif
 endif
 
+HOMA_LIBS = -L$(HOMA_PATH)/build/ -L$(HOMA_PATH)/build/_deps/perfutils-build/
+HOMA_LIBS += -lHoma -lPerfUtils -lstdc++
+
 # must be first
 all: libbase.a libnet.a libruntime.a iokerneld iokerneld-noht $(test_targets)
 
@@ -101,7 +105,8 @@ iokerneld-noht: $(iokernel_noht_obj) libbase.a libnet.a base/base.ld
 	 -lpthread -lnuma -ldl
 
 $(test_targets): $(test_obj) libbase.a libruntime.a libnet.a base/base.ld
-	$(LD) $(LDFLAGS) -o $@ $@.o libruntime.a libnet.a libbase.a -lpthread
+	$(LD) $(LDFLAGS) -o $@ $@.o libruntime.a libnet.a libbase.a -lpthread \
+     $(HOMA_LIBS)
 
 # general build rules for all targets
 src = $(base_src) $(net_src) $(runtime_src) $(iokernel_src) $(test_src)
