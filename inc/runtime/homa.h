@@ -9,16 +9,17 @@
 #include <runtime/net.h>
 #include <sys/uio.h>
 
-// FIXME(Yilong): remove this
-/* the maximum size of a HOMA payload */
-#define HOMA_MAX_PAYLOAD 1472
-
 /*
  * Homa Socket API
  */
 
 struct homaconn;
 typedef struct homaconn homaconn_t;
+
+extern void* homa_trans;
+
+/* the maximum size of a Homa packet payload */
+#define HOMA_MAX_PAYLOAD 1476
 
 extern int homa_open(struct netaddr laddr, homaconn_t **c_out);
 extern int homa_bind(homaconn_t *c, uint16_t port);

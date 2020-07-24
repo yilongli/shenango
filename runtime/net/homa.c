@@ -4,6 +4,7 @@
 
 #include <string.h>
 
+#include <base/log.h>
 #include <base/hash.h>
 #include <runtime/smalloc.h>
 #include <runtime/rculist.h>
@@ -14,9 +15,30 @@
 #include "defs.h"
 #include "waitq.h"
 
+// FIXME: use <...> instead of ""?
+//#include <Homa/Shenango.h>
+#include "../../homa/include/Homa/Shenango.h"
+
 #define HOMA_IN_DEFAULT_CAP	512
 #define HOMA_OUT_DEFAULT_CAP	2048
 #define HOMA_MIN_CLIENT_PORT 60000
+
+/* an opaque pointer to the homa transport instance */
+void* homa_trans;
+
+/**
+ * homa_init_late - instantiates homa transport instance
+ *
+ * Returns 0 (always successful).
+ */
+int homa_init_late(void)
+{
+    void *shim_drv = homa_driver_create(IPPROTO_HOMA, netcfg.addr,
+            HOMA_MAX_PAYLOAD, 10*1000, net_tx_alloc_mbuf, net_tx_ip, mbuf_free);
+    homa_trans = homa_trans_create(shim_drv, 0);
+    log_info("homa driver payload size %u", homa_driver_max_payload(shim_drv));
+    return 0;
+}
 
 static int homa_send_raw(struct mbuf *m, size_t len,
 			struct netaddr laddr, struct netaddr raddr)

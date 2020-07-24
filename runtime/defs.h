@@ -497,6 +497,7 @@ extern int arp_init_late(void);
 extern int stat_init_late(void);
 extern int tcp_init_late(void);
 extern int rcu_init_late(void);
+extern int homa_init_late(void);
 
 /* configuration loading */
 extern int cfg_load(const char *path);
