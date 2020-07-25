@@ -111,12 +111,18 @@ int trans_table_add_with_ephemeral_port(struct trans_entry *e)
 	uint16_t num_ephemeral = MAX_EPHEMERAL - MIN_EPHEMERAL + 1;
 	int ret;
 
-	if (e->match != TRANS_MATCH_5TUPLE)
-		return -EINVAL;
+	// TODO: why the following check?
+//	if (e->match != TRANS_MATCH_5TUPLE)
+//		return -EINVAL;
 
 	e->laddr.port = 0;
-	offset = trans_hash_5tuple(e->proto, e->laddr, e->raddr) +
-							load_acquire(&ephemeral_offset);
+//	offset = trans_hash_5tuple(e->proto, e->laddr, e->raddr) +
+//							load_acquire(&ephemeral_offset);
+	offset = load_acquire(&ephemeral_offset);
+	if (e->match == TRANS_MATCH_3TUPLE)
+	    offset += trans_hash_3tuple(e->proto, e->laddr);
+	else
+        offset += trans_hash_5tuple(e->proto, e->laddr, e->raddr);
 	while (next_ephemeral < num_ephemeral) {
 		uint32_t port = MIN_EPHEMERAL +
 				(next_ephemeral++ + offset) % num_ephemeral;
@@ -168,7 +174,7 @@ static struct trans_entry *trans_lookup(struct mbuf *m)
 	mbuf_mark_transport_offset(m);
 	iphdr = mbuf_network_hdr(m, *iphdr);
 	if (unlikely(iphdr->proto != IPPROTO_UDP &&
-		     iphdr->proto != IPPROTO_TCP))
+        iphdr->proto != IPPROTO_TCP && iphdr->proto != IPPROTO_HOMA))
 		return NULL;
 	l4hdr = (struct l4_hdr *)mbuf_data(m);
 	if (unlikely(mbuf_length(m) < sizeof(*l4hdr)))

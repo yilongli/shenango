@@ -114,7 +114,7 @@ static void do_server(void *arg)
 	int ret;
 
 	laddr.ip = 0;
-	laddr.port = NETPERF_PORT;
+	laddr.port = 0;
 
 	ret = homa_open(laddr, &c);
 	BUG_ON(ret);

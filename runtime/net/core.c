@@ -202,6 +202,7 @@ static struct mbuf *net_rx_one(struct rx_net_hdr *hdr)
 
 	case IPPROTO_UDP:
 	case IPPROTO_TCP:
+	case IPPROTO_HOMA:
 		return m;
 
 	default:

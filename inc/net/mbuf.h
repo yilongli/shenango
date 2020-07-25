@@ -25,11 +25,15 @@
  * details).
  */
 struct mbuf {
+    /* the first two members must match homapkt_t precisely */
+    unsigned char	*data;	   /* current position within the buffer */
+    unsigned int	len;	   /* length of the data */
+
 	struct mbuf	*next;	   /* the next mbuf in the mbufq */
 	unsigned char	*head;	   /* start of the buffer */
-	unsigned char	*data;	   /* current position within the buffer */
+//	unsigned char	*data;	   /* current position within the buffer */
 	unsigned int	head_len;  /* length of the entire buffer from @head */
-	unsigned int	len;	   /* length of the data */
+//	unsigned int	len;	   /* length of the data */
 	unsigned int	csum_type; /* type of checksum */
 	unsigned int	csum;	   /* 16-bit one's complement */
 
