@@ -53,14 +53,14 @@ static void client_worker(void *arg)
 	}
 
 	while (microtime() < stop_us) {
-	    ret = homa_send(c, buf, message_len, raddr);
+	    ret = homa_send(c, buf, message_len, raddr, NULL);
 	    if (ret < 0) {
 			log_err("homa_send() failed, ret = %ld", ret);
 			break;
 	    }
 
 	    struct netaddr saddr;
-	    ret = homa_recv(c, buf, message_len, &saddr);
+	    ret = homa_recv(c, buf, message_len, &saddr, NULL);
         if (ret < 0) {
             log_err("homa_recv() failed, ret = %ld", ret);
             break;
@@ -124,9 +124,9 @@ static void do_server(void *arg)
     unsigned char buf[BUF_SIZE];
     struct netaddr raddr;
     while (true) {
-        ret = homa_recv(c, buf, BUF_SIZE, &raddr);
+        ret = homa_recv(c, buf, BUF_SIZE, &raddr, NULL);
         BUG_ON(ret);
-        ret = homa_reply(c, buf, message_len, &raddr);
+        ret = homa_reply(c, buf, message_len, raddr, 0);
         BUG_ON(ret);
     }
     homa_shutdown(c);

@@ -30,6 +30,12 @@ typedef struct PacketSpec homapkt_t;
 BUILD_ASSERT(offsetof(homapkt_t, payload) == offsetof(struct mbuf, data));
 BUILD_ASSERT(offsetof(homapkt_t, length) == offsetof(struct mbuf, len));
 
+struct in_msg {
+    void*               in_msg;
+    struct netaddr      src;
+    struct list_node    link;
+};
+
 /* a periodic background thread that handles timeout events */
 static void homa_worker(void *arg)
 {
@@ -87,12 +93,20 @@ void* homa_tx_alloc_mbuf(void)
 
 /* homa socket */
 struct homaconn {
+    // TODO: do we really need two entries? if homa_bind() is call on a socket,
+    // can we trans_remove(c_e)?
+    // TODO: Now I don't think it makes sense to have two entries! The core of
+    // Homa is msg-oriented; so just like UDP, one port num per socket is enough
+    // for everything we want to do, right? John's API is a bit awkward for some reason.
     struct trans_entry    c_e;    /* client entry in the global socket table */
     struct trans_entry    s_e;    /* server entry in the global socket table */
     bool            shutdown;   /* socket shutdown? */
 
-    spinlock_t        lock;       /* protects TODO? */
-    void*           mailbox;
+    spinlock_t          lock;       /* protects TODO? */
+	waitq_t             inq_wq;     /* queue of threads waiting for ingress msg */
+    int                 inq_len;    /* size of the ingress queue */
+    struct list_head	in_msgs;
+    void*               mailbox;
 };
 
 /* handles ingress packets for Homa sockets */
@@ -114,7 +128,8 @@ static void homa_conn_recv(struct trans_entry *e, struct mbuf *m)
     homaconn_t *c = (e->laddr.port < HOMA_MIN_CLIENT_PORT) ?
             container_of(e, homaconn_t, s_e) :
             container_of(e, homaconn_t, c_e);
-    homa_trans_proc(homa_trans, m, e->laddr.ip, c->mailbox);
+    struct ip_hdr *iphdr = mbuf_network_hdr(m, *iphdr);
+    homa_trans_proc(homa_trans, m, ntoh32(iphdr->saddr), c->mailbox);
 }
 
 /* handles network errors for Homa sockets */
@@ -130,10 +145,26 @@ const struct trans_ops homa_conn_ops = {
     .err = homa_conn_err,
 };
 
-static void homa_mb_deliver(homaconn_t *c, void* in_msg)
+static void homa_mb_deliver(homaconn_t *c, void* in_msg, uint32_t ip,
+                            uint16_t port)
 {
-    // TODO:
-    log_info("homa_mb_deliver: received %lu-byte msg", homa_inmsg_len(in_msg));
+    /* allocate a list node */
+    struct in_msg* elem = smalloc(sizeof(*elem));
+    elem->in_msg = in_msg;
+    elem->src.ip = ip;
+    elem->src.port = port;
+
+    spin_lock_np(&c->lock);
+
+    /* add the message to the ingress queue */
+    list_add_tail(&c->in_msgs, &elem->link);
+    c->inq_len++;
+
+    /* wake up a waiter */
+    struct thread* th = waitq_signal(&c->inq_wq, &c->lock);
+    spin_unlock_np(&c->lock);
+
+    waitq_signal_finish(th);
 }
 
 static void homa_init_conn(homaconn_t *c)
@@ -142,6 +173,9 @@ static void homa_init_conn(homaconn_t *c)
     bzero(&c->s_e, sizeof(struct trans_entry));
     c->shutdown = false;
     spin_lock_init(&c->lock);
+    waitq_init(&c->inq_wq);
+    c->inq_len = 0;
+    list_head_init(&c->in_msgs);
     c->mailbox = homa_mailbox_create(c, homa_mb_deliver);
 }
 
@@ -243,16 +277,45 @@ struct netaddr homa_server_addr(homaconn_t *c)
 // FIXME: this is the api of John's kernel impl.; it's a bit unnatural for
 // user impl. (i.e., buf & len should be dropped; instead a msg object should
 // be returned)
-ssize_t homa_recv(homaconn_t *c, void *buf, size_t len, struct netaddr *raddr)
+ssize_t homa_recv(homaconn_t *c, void *buf, size_t len, struct netaddr *raddr,
+                  uint64_t *id)
 {
-    // FIXME: grab an ingress msg from c->inq; blocked until there is one
-    timer_sleep(300 * 1000000);
+	spin_lock_np(&c->lock);
+
+	/* block until there is an actionable event */
+	while (list_empty(&c->in_msgs) && !c->shutdown)
+		waitq_wait(&c->inq_wq, &c->lock);
+
+    /* is the socket drained and shutdown? */
+    if (list_empty(&c->in_msgs) && c->shutdown) {
+        spin_unlock_np(&c->lock);
+        return 0;
+	}
+
+    /* pop an in_msg and deliver the payload */
+    struct in_msg *elem = list_pop(&c->in_msgs, struct in_msg, link);
+    spin_unlock_np(&c->lock);
+
+    void *in_msg = elem->in_msg;
+    sfree(elem);
+
+    if (raddr)
+        *raddr = elem->src;
+    log_info("homa_recv: received %lu-byte msg", homa_inmsg_len(in_msg));
     return 0;
 }
 
-ssize_t homa_reply(homaconn_t *c, const void *buf, size_t len,
-                const struct netaddr *raddr)
+int homa_reply(homaconn_t *c, const void *buf, size_t len,
+                   struct netaddr raddr, uint64_t id)
 {
+    // FIXME: remove this limitation to allow multi-packet messages
+    if (len > HOMA_MAX_PAYLOAD)
+        return -EMSGSIZE;
+
+    // fixme: the use of s_e is the only diff. from homa_send?
+    void* out_msg = homa_trans_alloc(homa_trans, c->s_e.laddr.port);
+    homa_outmsg_append(out_msg, buf, len);
+    homa_outmsg_send(out_msg, raddr.ip, raddr.port);
     return 0;
 }
 
@@ -262,11 +325,13 @@ ssize_t homa_reply(homaconn_t *c, const void *buf, size_t len,
  * @buf: a buffer from which to load the payload
  * @len: the length of the payload
  * @raddr: the remote address of the message
+ * @id[out]: unique identifier of the message
  *
  * Returns 0 on success. If an error occurs, returns < 0 to indicate the error
  * code.
  */
-int homa_send(homaconn_t *c, const void *buf, size_t len, struct netaddr raddr)
+int homa_send(homaconn_t *c, const void *buf, size_t len, struct netaddr raddr,
+              uint64_t *id)
 {
     // FIXME: remove this limitation to allow multi-packet messages
     if (len > HOMA_MAX_PAYLOAD)
