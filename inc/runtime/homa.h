@@ -15,8 +15,6 @@
 struct homaconn;
 typedef struct homaconn homaconn_t;
 
-extern void* homa_trans;
-
 /* the maximum size of a Homa packet payload */
 #define HOMA_MAX_PAYLOAD 1476
 

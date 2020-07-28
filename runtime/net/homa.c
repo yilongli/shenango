@@ -23,7 +23,7 @@
 
 
 /* an opaque pointer to the homa transport instance */
-void* homa_trans;
+homa_trans homa;
 
 /* compile-time verification of mbuf layout compatibility */
 typedef struct PacketSpec homapkt_t;
@@ -31,7 +31,7 @@ BUILD_ASSERT(offsetof(homapkt_t, payload) == offsetof(struct mbuf, data));
 BUILD_ASSERT(offsetof(homapkt_t, length) == offsetof(struct mbuf, len));
 
 struct in_msg {
-    void*               in_msg;
+    homa_inmsg          in_msg;
     struct netaddr      src;
     struct list_node    link;
 };
@@ -64,9 +64,9 @@ static void homa_worker(void *arg)
 int homa_init_late(void)
 {
     uint32_t speed = 10 * 1000; // Mbits/second
-    void *shim_drv = homa_driver_create(IPPROTO_HOMA, netcfg.addr,
+    homa_driver shim_drv = homa_driver_create(IPPROTO_HOMA, netcfg.addr,
             HOMA_MAX_PAYLOAD, speed, homa_tx_alloc_mbuf, net_tx_ip, mbuf_free);
-    homa_trans = homa_trans_create(shim_drv, 0);
+    homa = homa_trans_create(shim_drv, 0);
     log_info("homa driver payload size %u", homa_driver_max_payload(shim_drv));
     return 0;
 }
@@ -106,7 +106,7 @@ struct homaconn {
 	waitq_t             inq_wq;     /* queue of threads waiting for ingress msg */
     int                 inq_len;    /* size of the ingress queue */
     struct list_head	in_msgs;
-    void*               mailbox;
+    homa_mailbox        mailbox;
 };
 
 /* handles ingress packets for Homa sockets */
@@ -129,7 +129,7 @@ static void homa_conn_recv(struct trans_entry *e, struct mbuf *m)
             container_of(e, homaconn_t, s_e) :
             container_of(e, homaconn_t, c_e);
     struct ip_hdr *iphdr = mbuf_network_hdr(m, *iphdr);
-    homa_trans_proc(homa_trans, m, ntoh32(iphdr->saddr), c->mailbox);
+    homa_trans_proc(homa, m, ntoh32(iphdr->saddr), c->mailbox);
 }
 
 /* handles network errors for Homa sockets */
@@ -145,7 +145,7 @@ const struct trans_ops homa_conn_ops = {
     .err = homa_conn_err,
 };
 
-static void homa_mb_deliver(homaconn_t *c, void* in_msg, uint32_t ip,
+static void homa_mb_deliver(homaconn_t *c, homa_inmsg in_msg, uint32_t ip,
                             uint16_t port)
 {
     /* allocate a list node */
@@ -296,7 +296,7 @@ ssize_t homa_recv(homaconn_t *c, void *buf, size_t len, struct netaddr *raddr,
     struct in_msg *elem = list_pop(&c->in_msgs, struct in_msg, link);
     spin_unlock_np(&c->lock);
 
-    void *in_msg = elem->in_msg;
+    homa_inmsg in_msg = elem->in_msg;
     sfree(elem);
 
     if (raddr)
@@ -313,7 +313,7 @@ int homa_reply(homaconn_t *c, const void *buf, size_t len,
         return -EMSGSIZE;
 
     // fixme: the use of s_e is the only diff. from homa_send?
-    void* out_msg = homa_trans_alloc(homa_trans, c->s_e.laddr.port);
+    homa_outmsg out_msg = homa_trans_alloc(homa, c->s_e.laddr.port);
     homa_outmsg_append(out_msg, buf, len);
     homa_outmsg_send(out_msg, raddr.ip, raddr.port);
     return 0;
@@ -337,7 +337,7 @@ int homa_send(homaconn_t *c, const void *buf, size_t len, struct netaddr raddr,
     if (len > HOMA_MAX_PAYLOAD)
         return -EMSGSIZE;
 
-    void* out_msg = homa_trans_alloc(homa_trans, c->c_e.laddr.port);
+    homa_outmsg out_msg = homa_trans_alloc(homa, c->c_e.laddr.port);
     homa_outmsg_append(out_msg, buf, len);
     homa_outmsg_send(out_msg, raddr.ip, raddr.port);
     return 0;
