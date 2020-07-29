@@ -82,6 +82,63 @@ void mutex_init(mutex_t *m)
 }
 
 /*
+ * Semaphore support
+ */
+
+void sema_init(sema_t *sema, unsigned value)
+{
+    spin_lock_init(&sema->lock);
+    list_head_init(&sema->waiters);
+    sema->value = value;
+}
+
+void sema_down(sema_t *sema)
+{
+	thread_t *myth;
+
+	spin_lock_np(&sema->lock);
+	myth = thread_self();
+	if (sema->value == 0) {
+        list_add_tail(&sema->waiters, &myth->link);
+        thread_park_and_unlock_np(&sema->lock);
+        return;
+	}
+	sema->value--;
+    spin_unlock_np(&sema->lock);
+}
+
+bool sema_try_down(sema_t *sema)
+{
+    bool success;
+
+    spin_lock_np(&sema->lock);
+    if (sema->value > 0) {
+        sema->value--;
+        success = true;
+    } else
+        success = false;
+    spin_unlock_np(&sema->lock);
+    return success;
+}
+
+void sema_up(sema_t *sema)
+{
+    thread_t *waketh;
+
+    spin_lock_np(&sema->lock);
+    waketh = list_pop(&sema->waiters, thread_t, link);
+    if (waketh) {
+        /* don't increment value */
+        spin_unlock_np(&sema->lock);
+        /* transfer credit to waketh directly */
+        thread_ready(waketh);
+    } else {
+        sema->value++;
+        spin_unlock_np(&sema->lock);
+    }
+}
+
+/*
  * Read-write mutex support
  */
 

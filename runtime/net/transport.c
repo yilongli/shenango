@@ -8,6 +8,7 @@
 #include <runtime/sync.h>
 #include <runtime/net.h>
 #include <net/ip.h>
+#include <runtime/homa.h>
 
 #include "defs.h"
 
@@ -185,6 +186,13 @@ static struct trans_entry *trans_lookup(struct mbuf *m)
 	laddr.port = ntoh16(l4hdr->dport);
 	raddr.ip = ntoh32(iphdr->saddr);
 	raddr.port = ntoh16(l4hdr->sport);
+
+	/* handle Homa control packets directly */
+	if (iphdr->proto == IPPROTO_HOMA && !laddr.port && !raddr.port) {
+	    homa_mailbox mb = {NULL};
+	    homa_trans_proc(homa, m, raddr.ip, mb);
+	    return NULL;
+	}
 
 	/* attempt to find a 5-tuple match */
 	hash = trans_hash_5tuple(iphdr->proto, laddr, raddr);

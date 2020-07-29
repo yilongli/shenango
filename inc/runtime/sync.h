@@ -48,6 +48,23 @@ static inline void assert_mutex_held(mutex_t *m)
 
 
 /*
+ * Semaphore support
+ */
+
+struct semaphore {
+    spinlock_t		    lock;
+    unsigned            value;
+    struct list_head	waiters;
+};
+
+typedef struct semaphore sema_t;
+
+extern void sema_init(sema_t *sema, unsigned value);
+extern void sema_down(sema_t *sema);
+extern bool sema_try_down(sema_t *sema);
+extern void sema_up(sema_t *sema);
+
+/*
  * Condition variable support
  */
 

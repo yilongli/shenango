@@ -38,38 +38,38 @@ static void client_worker(void *arg)
 	homaconn_t *c;
 	struct netaddr laddr;
 	ssize_t ret;
+	int status;
 	int budget = depth;
 
-	/* local IP + ephemeral port */
 	laddr.ip = 0;
-	laddr.port = 0;
+	laddr.port = NETPERF_PORT;
+    ret = homa_open(laddr, &c);
+    if (ret) {
+        log_err("homa_open() failed, ret = %ld", ret);
+        goto done;
+    }
 
 	memset(buf, 0xAB, message_len);
 
-	ret = homa_open(laddr, &c);
-	if (ret) {
-		log_err("homa_open() failed, ret = %ld", ret);
-		goto done;
-	}
-
 	while (microtime() < stop_us) {
-	    ret = homa_send(c, buf, message_len, raddr, NULL);
+	    ret = homa_sendmsg(c, buf, message_len, raddr, &status);
 	    if (ret < 0) {
-			log_err("homa_send() failed, ret = %ld", ret);
+			log_err("homa_sendmsg() failed, ret = %ld", ret);
 			break;
 	    }
 
 	    struct netaddr saddr;
-	    ret = homa_recv(c, buf, message_len, &saddr, NULL);
+	    homa_inmsg reply = homa_recvmsg(c, &saddr);
         if (ret < 0) {
             log_err("homa_recv() failed, ret = %ld", ret);
             break;
         }
+        homa_inmsg_release(reply);
 
         args->reqs++;
 	}
 
-	log_info("close port %hu", homa_client_addr(c).port);
+	log_info("close port %hu", homa_local_addr(c).port);
 	homa_shutdown(c);
 	homa_close(c);
 done:
@@ -114,20 +114,22 @@ static void do_server(void *arg)
 	int ret;
 
 	laddr.ip = 0;
-	laddr.port = 0;
-
+	laddr.port = NETPERF_PORT;
 	ret = homa_open(laddr, &c);
-	BUG_ON(ret);
-	ret = homa_bind(c, NETPERF_PORT);
 	BUG_ON(ret);
 
     unsigned char buf[BUF_SIZE];
     struct netaddr raddr;
+    homa_inmsg req;
+    int status;
     while (true) {
-        ret = homa_recv(c, buf, BUF_SIZE, &raddr, NULL);
+        req = homa_recvmsg(c, &raddr);
+        BUG_ON(req.p == NULL);
+        homa_inmsg_release(req);
+
+        ret = homa_sendmsg(c, buf, message_len, raddr, &status);
         BUG_ON(ret);
-        ret = homa_reply(c, buf, message_len, raddr, 0);
-        BUG_ON(ret);
+        BUG_ON(status != COMPLETED);
     }
     homa_shutdown(c);
     homa_close(c);
