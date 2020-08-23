@@ -137,6 +137,51 @@ int trans_table_add_with_ephemeral_port(struct trans_entry *e)
 }
 
 /**
+ * trans_table_lookup - finds an entry from the match table
+ * @proto: the transport protocol
+ * @laddr: the local address
+ * @raddr: the remote address
+ *
+ * Returns a transport entry if successful or NULL if no match is found.
+ */
+struct trans_entry *trans_table_lookup(uint8_t proto, struct netaddr laddr,
+        struct netaddr raddr)
+{
+    struct trans_entry *e;
+    struct rcu_hlist_node *node;
+    uint32_t hash;
+
+    assert(rcu_read_lock_held());
+
+    /* attempt to find a 5-tuple match */
+	hash = trans_hash_5tuple(proto, laddr, raddr);
+	rcu_hlist_for_each(&trans_tbl[hash % TRANS_TBL_SIZE], node, false) {
+		e = rcu_hlist_entry(node, struct trans_entry, link);
+		if (e->match != TRANS_MATCH_5TUPLE)
+			continue;
+		if (e->proto == proto &&
+		    e->laddr.ip == laddr.ip && e->laddr.port == laddr.port &&
+		    e->raddr.ip == raddr.ip && e->raddr.port == raddr.port) {
+			return e;
+		}
+	}
+
+	/* attempt to find a 3-tuple match */
+	hash = trans_hash_3tuple(proto, laddr);
+	rcu_hlist_for_each(&trans_tbl[hash % TRANS_TBL_SIZE], node, false) {
+		e = rcu_hlist_entry(node, struct trans_entry, link);
+		if (e->match != TRANS_MATCH_3TUPLE)
+			continue;
+		if (e->proto == proto &&
+		    e->laddr.ip == laddr.ip && e->laddr.port == laddr.port) {
+			return e;
+		}
+	}
+
+	return NULL;
+}
+
+/**
  * trans_table_remove - removes an entry from the match table
  * @e: the entry to remove
  *
@@ -164,10 +209,7 @@ static struct trans_entry *trans_lookup(struct mbuf *m)
 {
 	const struct ip_hdr *iphdr;
 	const struct l4_hdr *l4hdr;
-	struct trans_entry *e;
-	struct rcu_hlist_node *node;
 	struct netaddr laddr, raddr;
-	uint32_t hash;
 
 	assert(rcu_read_lock_held());
 
@@ -187,39 +229,19 @@ static struct trans_entry *trans_lookup(struct mbuf *m)
 	raddr.ip = ntoh32(iphdr->saddr);
 	raddr.port = ntoh16(l4hdr->sport);
 
-	/* handle Homa control packets directly */
-	if (iphdr->proto == IPPROTO_HOMA && !laddr.port && !raddr.port) {
-	    homa_mailbox mb = {NULL};
-	    homa_trans_proc(homa, m, raddr.ip, mb);
+	/*
+	 * Unlike TCP, Homa schedules network packets globally across sockets;
+	 * as a result, there is no point to dispatch an ingress packet to its
+	 * socket before passing it through the Homa protocol stack. Besides,
+	 * L4 headers of Homa control packets are currently zeroed, so they
+	 * must be handled directly anyway.
+	 */
+	if (iphdr->proto == IPPROTO_HOMA) {
+	    homa_trans_proc(homa, m, raddr.ip);
 	    return NULL;
 	}
 
-	/* attempt to find a 5-tuple match */
-	hash = trans_hash_5tuple(iphdr->proto, laddr, raddr);
-	rcu_hlist_for_each(&trans_tbl[hash % TRANS_TBL_SIZE], node, false) {
-		e = rcu_hlist_entry(node, struct trans_entry, link);
-		if (e->match != TRANS_MATCH_5TUPLE)
-			continue;
-		if (e->proto == iphdr->proto &&
-		    e->laddr.ip == laddr.ip && e->laddr.port == laddr.port &&
-		    e->raddr.ip == raddr.ip && e->raddr.port == raddr.port) {
-			return e;
-		}
-	}
-
-	/* attempt to find a 3-tuple match */
-	hash = trans_hash_3tuple(iphdr->proto, laddr);
-	rcu_hlist_for_each(&trans_tbl[hash % TRANS_TBL_SIZE], node, false) {
-		e = rcu_hlist_entry(node, struct trans_entry, link);
-		if (e->match != TRANS_MATCH_3TUPLE)
-			continue;
-		if (e->proto == iphdr->proto &&
-		    e->laddr.ip == laddr.ip && e->laddr.port == laddr.port) {
-			return e;
-		}
-	}
-
-	return NULL;
+	return trans_table_lookup(iphdr->proto, laddr, raddr);
 }
 
 /**

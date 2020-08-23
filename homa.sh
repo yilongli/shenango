@@ -8,10 +8,8 @@ git submodule update --recursive homa
 
 # Switch to branch homa-dev
 cd homa
-git checkout -b homa-dev
-git pull origin homa-dev
+git fetch --all
+git reset --hard origin/shenango
 
 # Build homa library
-mkdir build
-cmake ..
-make clean; make -j
+mkdir build && cd build && cmake .. && make clean; make -j

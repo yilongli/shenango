@@ -79,8 +79,9 @@ int homa_init_late(void)
     // TODO: read link_speed from netcfg?
     uint32_t speed = 10 * 1000; // Mbits/second
     homa_driver shim_drv = homa_driver_create(IPPROTO_HOMA, netcfg.addr,
-            HOMA_MAX_PAYLOAD, speed, homa_tx_alloc_mbuf, net_tx_ip, mbuf_free);
-    homa = homa_trans_create(shim_drv, 0);
+            HOMA_MAX_PAYLOAD, speed);
+    homa_mailbox_dir dir = homa_mb_dir_create(IPPROTO_HOMA, netcfg.addr);
+    homa = homa_trans_create(shim_drv, dir, 0);
 
     /* start the long-running Homa background thread */
     BUG_ON(thread_spawn(homa_worker, NULL));
@@ -95,31 +96,17 @@ int homa_init_late(void)
 struct homaconn {
     struct trans_entry  e;          /* entry in the global socket table */
     spinlock_t          lock;       /* per-socket lock */
-    homa_mailbox        mailbox;    /* used by homa lib to deliver msg */
+    homa_sk             sk;         /* handle to Homa::Socket */
     int                 rxq_len;    /* size of the ingress msg queue */
     struct list_head    rxq;        /* ingress messages to be processed */
     bool                shutdown;   /* socket shutdown? */
     waitq_t             wq;         /* uthreads waiting for ingress msgs */
 };
 
-/** handles ingress Homa packets */
-/**
- * homa_conn_recv - handles an ingress Homa packet
- * @e: used to identify the destination socket of the packet
- * @m: the ingress packet
- */
-static void homa_conn_recv(struct trans_entry *e, struct mbuf *m)
-{
-    homaconn_t *c =  container_of(e, homaconn_t, e);
-    struct ip_hdr *iphdr = mbuf_network_hdr(m, *iphdr);
-
-    /* run the packet through the homa protocol stack */
-    homa_trans_proc(homa, m, ntoh32(iphdr->saddr), c->mailbox);
-}
-
 /* operations for Homa sockets */
 const struct trans_ops homa_conn_ops = {
-    .recv = homa_conn_recv,
+    /* homa_trans_proc is invoked directly from transport.c:trans_lookup() */
+    .recv = NULL,
     .err = NULL,
 };
 
@@ -157,7 +144,7 @@ static void homa_init_conn(homaconn_t *c)
 {
     bzero(&c->e, sizeof(struct trans_entry));
     spin_lock_init(&c->lock);
-    c->mailbox = homa_mailbox_create(c, homa_mb_deliver);
+    bzero(&c->sk, sizeof(homa_sk));
     c->rxq_len = 0;
     list_head_init(&c->rxq);
     c->shutdown = false;
@@ -168,6 +155,7 @@ static void homa_init_conn(homaconn_t *c)
 static void homa_finish_release_conn(struct rcu_head *h)
 {
     homaconn_t *c = container_of(h, homaconn_t, e.rcu);
+    homa_sk_close(c->sk);
     sfree(c);
 }
 
@@ -214,6 +202,7 @@ int homa_open(struct netaddr laddr, homaconn_t **c_out)
         return ret;
     }
 
+    c->sk = homa_trans_open(homa, c->e.laddr.port);
     *c_out = c;
     return 0;
 }
@@ -295,7 +284,7 @@ int homa_sendmsg(homaconn_t *c, const void *buf, size_t len,
         return -EMSGSIZE;
 
     sema_init(&sema, 0);
-    out_msg = homa_trans_alloc(homa, c->e.laddr.port);
+    out_msg = homa_sk_alloc(c->sk);
     homa_outmsg_register_cb(out_msg, homa_cb_outmsg_done, &sema);
     homa_outmsg_append(out_msg, buf, len);
     homa_outmsg_send(out_msg, raddr.ip, raddr.port);
@@ -312,7 +301,6 @@ void __homa_shutdown(homaconn_t *c)
 {
     BUG_ON(c->shutdown);
     c->shutdown = true;
-    homa_mailbox_free(c->mailbox);
 
     /* prevent ingress receive and error dispatch (after RCU period) */
     trans_table_remove(&c->e);
@@ -344,3 +332,15 @@ void homa_close(homaconn_t *c)
 
     homa_release_conn(c);
 }
+
+/* initialize function pointers that will be used in Homa/src/Shenango.cc */
+#define INIT_HOMA_SHENANGO_FUNC(func) void *shenango_##func = func;
+INIT_HOMA_SHENANGO_FUNC(smalloc)
+INIT_HOMA_SHENANGO_FUNC(sfree)
+INIT_HOMA_SHENANGO_FUNC(rcu_read_lock)
+INIT_HOMA_SHENANGO_FUNC(rcu_read_unlock)
+INIT_HOMA_SHENANGO_FUNC(homa_tx_alloc_mbuf)
+INIT_HOMA_SHENANGO_FUNC(mbuf_free)
+INIT_HOMA_SHENANGO_FUNC(net_tx_ip)
+INIT_HOMA_SHENANGO_FUNC(homa_mb_deliver)
+INIT_HOMA_SHENANGO_FUNC(trans_table_lookup)

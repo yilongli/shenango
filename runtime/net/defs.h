@@ -166,4 +166,6 @@ static inline void trans_init_5tuple(struct trans_entry *e, uint8_t proto,
 
 extern int trans_table_add(struct trans_entry *e);
 extern int trans_table_add_with_ephemeral_port(struct trans_entry *e);
+extern struct trans_entry *trans_table_lookup(uint8_t proto,
+        struct netaddr laddr, struct netaddr raddr);
 extern void trans_table_remove(struct trans_entry *e);
