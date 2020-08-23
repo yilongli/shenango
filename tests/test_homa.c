@@ -39,7 +39,6 @@ static void client_worker(void *arg)
 	struct netaddr laddr;
 	ssize_t ret;
 	int status;
-	int budget = depth;
 
 	laddr.ip = 0;
 	laddr.port = NETPERF_PORT;
@@ -64,6 +63,7 @@ static void client_worker(void *arg)
             log_err("homa_recv() failed, ret = %ld", ret);
             break;
         }
+        homa_inmsg_ack(reply);
         homa_inmsg_release(reply);
 
         args->reqs++;
@@ -83,7 +83,7 @@ static void do_client(void *arg)
 	int i, ret;
 	uint64_t reqs = 0;
 
-	log_info("client-mode TCP: %d workers, %ld bytes, %d seconds",
+	log_info("client-mode Homa: %d workers, %ld bytes, %d seconds",
 		 nworkers, message_len, seconds);
 
 	arg_tbl = calloc(nworkers, sizeof(*arg_tbl));
@@ -125,6 +125,7 @@ static void do_server(void *arg)
     while (true) {
         req = homa_recvmsg(c, &raddr);
         BUG_ON(req.p == NULL);
+        homa_inmsg_ack(req);
         homa_inmsg_release(req);
 
         ret = homa_sendmsg(c, buf, message_len, raddr, &status);

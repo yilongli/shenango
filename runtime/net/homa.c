@@ -19,11 +19,6 @@
 /* handle to the homa transport instance */
 homa_trans homa;
 
-/* compile-time verification of mbuf layout compatibility */
-typedef struct PacketSpec homapkt_t;
-BUILD_ASSERT(offsetof(homapkt_t, payload) == offsetof(struct mbuf, data));
-BUILD_ASSERT(offsetof(homapkt_t, length) == offsetof(struct mbuf, len));
-
 /* an ingress message */
 struct in_msg {
     homa_inmsg          in_msg; /* handle to homa ingress message */
@@ -32,7 +27,7 @@ struct in_msg {
 };
 
 /* a periodic background thread that handles timeout events */
-static void homa_worker(void *arg)
+static __noreturn void homa_timeout_handler(__notused void *arg)
 {
     uint64_t deadline_us;
     uint64_t next_tsc;
@@ -43,14 +38,59 @@ static void homa_worker(void *arg)
     }
 }
 
-// TODO: do we need a pacer thread to run sender-side SRPT logic?
-// TODO: or should we embed the sender-side logic in some shenango mechanism? e.g., softirq?
-// softirq is for low-level tasks? besides, changing softirq is more intrusive?
-// also softirq is run on all cores; this might not be what we want
-
-static void homa_pacer(void *arg)
+/**
+ * homa_pacer - starting method of the pacer thread which executes the sender-
+ * side logic of Homa.
+ */
+static __noreturn void homa_pacer(__notused void *arg)
 {
+    bool more_work;
+    uint64_t wait_until;
+    sema_t sema;
+    sema_init(&sema, 0);
 
+    /* register a callback to wake us up when packets are ready to be sent */
+    homa_trans_register_cb_send_ready(homa, (void (*)(void*))sema_up, &sema);
+
+    /* drives the sender by calling try_send() repeatedly */
+    while (1) {
+        more_work = homa_trans_try_send(homa, &wait_until);
+        if (more_work) {
+            /* sleep to allow the NIC to drain its transmit queue */
+            if (wait_until < start_tsc) {
+                log_warn("wait_until %lu is too small!", wait_until);
+                continue;
+            }
+            uint64_t deadline_us = (wait_until - start_tsc) / cycles_per_us;
+            timer_sleep_until(deadline_us);
+        } else {
+            /* sleep until more work arrive */
+            sema_down_all(&sema);
+        }
+    }
+}
+
+/**
+ * homa_grantor - starting method of the grantor thread, which executes the
+ * receiver-side logic of Homa.
+ */
+static __noreturn void homa_grantor(__notused void *arg)
+{
+    sema_t sema;
+    sema_init(&sema, 0);
+
+    /* register a callback to wake us up when messages are waiting for grants */
+    homa_trans_register_cb_need_grants(homa, (void (*)(void*))sema_up, &sema);
+
+    /* drives the receiver by calling try_send_grants() repeatedly */
+    while (1) {
+        homa_trans_try_grant(homa);
+
+        /* sleep until some messages are waiting for grants */
+        sema_down_all(&sema);
+        /* but delay a bit to amortize the cost of sending grants */
+        timer_sleep(5);
+    }
 }
 
 static void homa_tx_release_mbuf(struct mbuf *m)
@@ -59,14 +99,70 @@ static void homa_tx_release_mbuf(struct mbuf *m)
         net_tx_release_mbuf(m);
 }
 
-static void *homa_tx_alloc_mbuf(void)
+/**
+ * homa_tx_alloc_mbuf - allocates an mbuf for transmitting by the Homa transport
+ *
+ * @payload: set to the start address of the data buffer upon method return
+ *
+ * Returns an mbuf, or NULL if out of memory.
+ */
+static void *homa_tx_alloc_mbuf(void **payload)
 {
     struct mbuf *m = net_tx_alloc_mbuf();
     m->release = homa_tx_release_mbuf;
 
-    /* egress mbuf is initially shared between transport and driver */
-    atomic_write(&m->ref, 2);
+    /* egress mbuf is initially owned only by the transport */
+    atomic_write(&m->ref, 1);
+
+    *payload = m->data;
     return m;
+}
+
+/**
+ * homa_tx_ip - transmits an IP packet for the Homa transport
+ * @desc: the packet descriptor which identifies the mbuf to transmit
+ * @payload: the starting address of the payload
+ * @len: the length of the payload
+ * @proto: the transport protocol
+ * @daddr: the destination IP address (in native byte order)
+ * @prio: the packet priority
+ *
+ * This method is a thin wrapper around net_tx_ip() that helps convert a Homa
+ * Driver::Packet to mbuf; see net_tx_ip() for more information.
+ *
+ * Returns 0 if successful.
+ */
+static int homa_tx_ip(uintptr_t desc, void* payload, int32_t len, uint8_t proto,
+                      uint32_t daddr, uint8_t prio)
+{
+    int ref_cnt;
+    int ret;
+
+    struct mbuf *m = (struct mbuf*) desc;
+    m->data = payload;
+    m->len = len;
+
+    /* egress mbuf is also owned by the driver while being transmitted */
+    ref_cnt = atomic_fetch_and_add(&m->ref, 1);
+    if (unlikely(!ref_cnt)) {
+        /* transport already dropped the message; no need to transmit */
+        mbuf_free(m);
+        return -1;
+    }
+
+    // FIXME: pass packet priority to net_tx_ip; set ip priority!
+    /* on success, the mbuf will be freed when the transmit completes */
+    ret = net_tx_ip(m, proto, daddr);
+    if (unlikely(ret)) {
+        mbuf_free(m);
+    }
+    return ret;
+}
+
+static uint32_t homa_queued_bytes()
+{
+    // FIXME: how to implement this?
+    return 0;
 }
 
 /**
@@ -83,8 +179,10 @@ int homa_init_late(void)
     homa_mailbox_dir dir = homa_mb_dir_create(IPPROTO_HOMA, netcfg.addr);
     homa = homa_trans_create(shim_drv, dir, 0);
 
-    /* start the long-running Homa background thread */
-    BUG_ON(thread_spawn(homa_worker, NULL));
+    /* start the long-running Homa threads */
+    BUG_ON(thread_spawn(homa_pacer, NULL));
+    BUG_ON(thread_spawn(homa_grantor, NULL));
+    BUG_ON(thread_spawn(homa_timeout_handler, NULL));
     return 0;
 }
 
@@ -249,15 +347,7 @@ homa_inmsg homa_recvmsg(homaconn_t *c, struct netaddr *raddr)
     in_msg = node->in_msg;
     *raddr = node->src;
     sfree(node);
-
-    log_info("homa_recv: received %lu-byte msg", homa_inmsg_len(in_msg));
     return in_msg;
-}
-
-/* invoked when an egress message transitions to its end state */
-static void homa_cb_outmsg_done(sema_t *sema)
-{
-    sema_up(sema);
 }
 
 /**
@@ -279,13 +369,9 @@ int homa_sendmsg(homaconn_t *c, const void *buf, size_t len,
     sema_t sema;
     homa_outmsg out_msg;
 
-    // FIXME: remove this limitation to allow multi-packet messages
-    if (len > HOMA_MAX_PAYLOAD)
-        return -EMSGSIZE;
-
     sema_init(&sema, 0);
     out_msg = homa_sk_alloc(c->sk);
-    homa_outmsg_register_cb(out_msg, homa_cb_outmsg_done, &sema);
+    homa_outmsg_register_cb_end_state(out_msg, (void (*)(void*))sema_up, &sema);
     homa_outmsg_append(out_msg, buf, len);
     homa_outmsg_send(out_msg, raddr.ip, raddr.port);
 
@@ -316,6 +402,9 @@ void homa_shutdown(homaconn_t *c)
 {
     /* shutdown the Homa socket */
     __homa_shutdown(c);
+
+    /* wake all blocked threads */
+    waitq_release(&c->wq);
 }
 
 /**
@@ -340,7 +429,8 @@ INIT_HOMA_SHENANGO_FUNC(sfree)
 INIT_HOMA_SHENANGO_FUNC(rcu_read_lock)
 INIT_HOMA_SHENANGO_FUNC(rcu_read_unlock)
 INIT_HOMA_SHENANGO_FUNC(homa_tx_alloc_mbuf)
+INIT_HOMA_SHENANGO_FUNC(homa_tx_ip)
+INIT_HOMA_SHENANGO_FUNC(homa_queued_bytes)
 INIT_HOMA_SHENANGO_FUNC(mbuf_free)
-INIT_HOMA_SHENANGO_FUNC(net_tx_ip)
 INIT_HOMA_SHENANGO_FUNC(homa_mb_deliver)
 INIT_HOMA_SHENANGO_FUNC(trans_table_lookup)

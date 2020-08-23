@@ -202,16 +202,19 @@ struct l4_hdr {
 /**
  * trans_lookup - finds the target socket (i.e., recipient) of an ingress packet
  * @m: the ingress packet
+ * @is_homa_pkt: set by the callee to indicate if the packet belongs to Homa
  *
- * Returns a transport entry if successful or NULL if no match is found.
+ * Returns a transport entry if successful or NULL if no match is found or
+ * @is_homa_pkt is set to true.
  */
-static struct trans_entry *trans_lookup(struct mbuf *m)
+static struct trans_entry *trans_lookup(struct mbuf *m, bool *is_homa_pkt)
 {
 	const struct ip_hdr *iphdr;
 	const struct l4_hdr *l4hdr;
 	struct netaddr laddr, raddr;
 
 	assert(rcu_read_lock_held());
+	*is_homa_pkt = false;
 
 	/* set up the network header pointers */
 	mbuf_mark_transport_offset(m);
@@ -237,8 +240,9 @@ static struct trans_entry *trans_lookup(struct mbuf *m)
 	 * must be handled directly anyway.
 	 */
 	if (iphdr->proto == IPPROTO_HOMA) {
-	    homa_trans_proc(homa, m, raddr.ip);
-	    return NULL;
+        *is_homa_pkt = true;
+        homa_trans_proc(homa, (uintptr_t)m, m->data, m->len, raddr.ip);
+        return NULL;
 	}
 
 	return trans_table_lookup(iphdr->proto, laddr, raddr);
@@ -253,6 +257,7 @@ void net_rx_trans(struct mbuf **ms, const unsigned int nr)
 {
 	int i;
 	const struct ip_hdr *iphdr;
+	bool is_homa_pkt;
 
 	/* deliver each packet to a L4 protocol handler */
 	for (i = 0; i < nr; i++) {
@@ -260,16 +265,18 @@ void net_rx_trans(struct mbuf **ms, const unsigned int nr)
 		struct trans_entry *e;
 
 		rcu_read_lock();
-		e = trans_lookup(m);
-		if (unlikely(!e)) {
-			rcu_read_unlock();
-			iphdr = mbuf_network_hdr(m, *iphdr);
-			if (iphdr->proto == IPPROTO_TCP)
-				tcp_rx_closed(m);
-			mbuf_free(m);
-			continue;
+		e = trans_lookup(m, &is_homa_pkt);
+		if (!is_homa_pkt) {
+            if (unlikely(!e)) {
+                rcu_read_unlock();
+                iphdr = mbuf_network_hdr(m, *iphdr);
+                if (iphdr->proto == IPPROTO_TCP)
+                    tcp_rx_closed(m);
+                mbuf_free(m);
+                continue;
+            }
+            e->ops->recv(e, m);
 		}
-		e->ops->recv(e, m);
 		rcu_read_unlock();
 	}
 }
@@ -282,9 +289,10 @@ void net_rx_trans(struct mbuf **ms, const unsigned int nr)
 void trans_error(struct mbuf *m, int err)
 {
 	struct trans_entry *e;
+	bool is_homa_pkt;
 
-        rcu_read_lock();
-	e = trans_lookup(m);
+    rcu_read_lock();
+	e = trans_lookup(m, &is_homa_pkt);
 	if (e && e->ops->err)
 		e->ops->err(e, err);
 	rcu_read_unlock();

@@ -92,19 +92,33 @@ void sema_init(sema_t *sema, unsigned value)
     sema->value = value;
 }
 
-void sema_down(sema_t *sema)
+static void __sema_down(sema_t *sema, bool clear_all)
 {
-	thread_t *myth;
+    thread_t *myth;
 
-	spin_lock_np(&sema->lock);
-	myth = thread_self();
-	if (sema->value == 0) {
+    spin_lock_np(&sema->lock);
+    myth = thread_self();
+    if (sema->value == 0) {
         list_add_tail(&sema->waiters, &myth->link);
         thread_park_and_unlock_np(&sema->lock);
         return;
-	}
-	sema->value--;
+    }
+    if (clear_all) {
+        sema->value = 0;
+    } else {
+        sema->value--;
+    }
     spin_unlock_np(&sema->lock);
+}
+
+void sema_down(sema_t *sema)
+{
+    __sema_down(sema, false);
+}
+
+void sema_down_all(sema_t *sema)
+{
+    __sema_down(sema, true);
 }
 
 bool sema_try_down(sema_t *sema)
