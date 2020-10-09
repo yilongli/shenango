@@ -19,10 +19,12 @@
 /* handle to the homa transport instance */
 homa_trans homa;
 
+/* number of egress bytes currently queued at the NIC by homa */
+static atomic_t homa_tx_queued_bytes;
+
 /* an ingress message */
 struct in_msg {
     homa_inmsg          in_msg; /* handle to homa ingress message */
-    struct netaddr      src;    /* source address of the message */
     struct list_node    link;   /* used to chain message in a list */
 };
 
@@ -57,10 +59,7 @@ static __noreturn void homa_pacer(__notused void *arg)
         more_work = homa_trans_try_send(homa, &wait_until);
         if (more_work) {
             /* sleep to allow the NIC to drain its transmit queue */
-            if (wait_until < start_tsc) {
-                log_warn("wait_until %lu is too small!", wait_until);
-                continue;
-            }
+            BUG_ON(wait_until < start_tsc);
             uint64_t deadline_us = (wait_until - start_tsc) / cycles_per_us;
             timer_sleep_until(deadline_us);
         } else {
@@ -70,33 +69,12 @@ static __noreturn void homa_pacer(__notused void *arg)
     }
 }
 
-/**
- * homa_grantor - starting method of the grantor thread, which executes the
- * receiver-side logic of Homa.
- */
-static __noreturn void homa_grantor(__notused void *arg)
-{
-    sema_t sema;
-    sema_init(&sema, 0);
-
-    /* register a callback to wake us up when messages are waiting for grants */
-    homa_trans_register_cb_need_grants(homa, (void (*)(void*))sema_up, &sema);
-
-    /* drives the receiver by calling try_send_grants() repeatedly */
-    while (1) {
-        homa_trans_try_grant(homa);
-
-        /* sleep until some messages are waiting for grants */
-        sema_down_all(&sema);
-        /* but delay a bit to amortize the cost of sending grants */
-        timer_sleep(5);
-    }
-}
-
 static void homa_tx_release_mbuf(struct mbuf *m)
 {
-    if (atomic_dec_and_test(&m->ref))
+    if (atomic_dec_and_test(&m->ref)) {
+        atomic_fetch_and_sub(&homa_tx_queued_bytes, (int)m->len);
         net_tx_release_mbuf(m);
+    }
 }
 
 /**
@@ -125,7 +103,7 @@ static void *homa_tx_alloc_mbuf(void **payload)
  * @len: the length of the payload
  * @proto: the transport protocol
  * @daddr: the destination IP address (in native byte order)
- * @prio: the packet priority
+ * @prio: the packet priority (0 is the lowest); must be less than 8
  *
  * This method is a thin wrapper around net_tx_ip() that helps convert a Homa
  * Driver::Packet to mbuf; see net_tx_ip() for more information.
@@ -150,19 +128,22 @@ static int homa_tx_ip(uintptr_t desc, void* payload, int32_t len, uint8_t proto,
         return -1;
     }
 
-    // FIXME: pass packet priority to net_tx_ip; set ip priority!
     /* on success, the mbuf will be freed when the transmit completes */
-    ret = net_tx_ip(m, proto, daddr);
+    ret = net_tx_ip_prio(m, proto, daddr, prio);
+    atomic_fetch_and_add(&homa_tx_queued_bytes, (int)m->len);
     if (unlikely(ret)) {
         mbuf_free(m);
     }
+    log_debug("homa_tx_ip: sent %d-byte homa packet, %d bytes ahead", len,
+            homa_tx_queued_bytes.cnt);
     return ret;
 }
 
 static uint32_t homa_queued_bytes()
 {
-    // FIXME: how to implement this?
-    return 0;
+    int ret = atomic_read(&homa_tx_queued_bytes);
+    assert(ret >= 0);
+    return ret;
 }
 
 /**
@@ -181,7 +162,6 @@ int homa_init_late(void)
 
     /* start the long-running Homa threads */
     BUG_ON(thread_spawn(homa_pacer, NULL));
-    BUG_ON(thread_spawn(homa_grantor, NULL));
     BUG_ON(thread_spawn(homa_timeout_handler, NULL));
     return 0;
 }
@@ -213,17 +193,13 @@ const struct trans_ops homa_conn_ops = {
  * destination socket
  * @c: the homa socket
  * @in_msg: the ingress message
- * @ip: the source ip address
- * @port: the source port number
  */
-static void homa_mb_deliver(homaconn_t *c, homa_inmsg in_msg, uint32_t ip,
-                            uint16_t port)
+static void homa_mb_deliver(homaconn_t *c, homa_inmsg in_msg)
 {
     /* allocate a list node */
     struct in_msg *node = smalloc(sizeof(*node));
     node->in_msg = in_msg;
-    node->src.ip = ip;
-    node->src.port = port;
+    bzero(&node->link, sizeof(struct list_node));
 
     spin_lock_np(&c->lock);
 
@@ -317,19 +293,17 @@ struct netaddr homa_local_addr(homaconn_t *c)
 /**
  * homa_recvmsg - receives an ingress message from a Homa socket
  * @c: the Homa socket
- * @raddr: a pointer to store the source address (if successful)
+ * @in_msg: a pointer to store the ingress message (if successful)
  *
  * WARNING: This a blocking function. It will wait until the ingress message
  * arrives, or the socket is shutdown.
  *
- * Return the ingress message. If the socket has been shutdown, returns a
- * null handle.
+ * Returns 0 if the message is delivered successfully. If an error occurs,
+ * returns < 0 to indicate the error code.
  */
-homa_inmsg homa_recvmsg(homaconn_t *c, struct netaddr *raddr)
+int homa_recvmsg(homaconn_t *c, homa_inmsg *in_msg)
 {
-    homa_inmsg in_msg = {NULL};
-
-	spin_lock_np(&c->lock);
+    spin_lock_np(&c->lock);
 
 	/* block until there is an actionable event */
 	while (list_empty(&c->rxq) && !c->shutdown)
@@ -338,16 +312,15 @@ homa_inmsg homa_recvmsg(homaconn_t *c, struct netaddr *raddr)
     /* is the socket drained and shutdown? */
     if (list_empty(&c->rxq) && c->shutdown) {
         spin_unlock_np(&c->lock);
-        return in_msg;
+        return -ESHUTDOWN;
 	}
 
     /* pop an in_msg and deliver the payload */
     struct in_msg *node = list_pop(&c->rxq, struct in_msg, link);
     spin_unlock_np(&c->lock);
-    in_msg = node->in_msg;
-    *raddr = node->src;
+    *in_msg = node->in_msg;
     sfree(node);
-    return in_msg;
+    return 0;
 }
 
 /**
@@ -364,23 +337,28 @@ homa_inmsg homa_recvmsg(homaconn_t *c, struct netaddr *raddr)
  * returns < 0 to indicate the error code.
  */
 int homa_sendmsg(homaconn_t *c, const void *buf, size_t len,
-        struct netaddr raddr, int *status)
+        struct netaddr raddr)
 {
     sema_t sema;
     homa_outmsg out_msg;
+    int status;
 
     sema_init(&sema, 0);
     out_msg = homa_sk_alloc(c->sk);
+    if (!out_msg.p) {
+        return -ENOMEM;
+    }
+
     homa_outmsg_register_cb_end_state(out_msg, (void (*)(void*))sema_up, &sema);
     homa_outmsg_append(out_msg, buf, len);
     homa_outmsg_send(out_msg, raddr.ip, raddr.port);
 
     /* block until the message is acked or a timeout occurs */
     sema_down(&sema);
-    *status = homa_outmsg_status(out_msg);
-
+    status = homa_outmsg_status(out_msg);
     homa_outmsg_release(out_msg);
-    return 0;
+
+    return (status == COMPLETED) ? 0 : -ETIMEDOUT;
 }
 
 void __homa_shutdown(homaconn_t *c)

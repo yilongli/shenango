@@ -363,7 +363,8 @@ int net_tx_eth(struct mbuf *m, uint16_t type, struct eth_addr dhost)
 	return 0;
 }
 
-static void net_push_iphdr(struct mbuf *m, uint8_t proto, uint32_t daddr)
+static void net_push_iphdr(struct mbuf *m, uint8_t proto, uint32_t daddr,
+        uint8_t prio)
 {
 	struct ip_hdr *iphdr;
 
@@ -373,7 +374,8 @@ static void net_push_iphdr(struct mbuf *m, uint8_t proto, uint32_t daddr)
 	iphdr = mbuf_push_hdr(m, *iphdr);
 	iphdr->version = IPVERSION;
 	iphdr->header_len = 5;
-	iphdr->tos = IPTOS_DSCP_CS0 | IPTOS_ECN_NOTECT;
+	/* store the priority in the high-order 3 bits of the TOS field */
+	iphdr->tos = (prio << 5) | IPTOS_ECN_NOTECT;
 	iphdr->len = hton16(mbuf_length(m));
 	/* This must be unique across datagrams within a flow, see RFC 6864 */
 	iphdr->id = hash_crc32c_two(IP_ID_SEED, rdtsc() ^ proto,
@@ -411,11 +413,22 @@ static uint32_t net_get_ip_route(uint32_t daddr)
  */
 int net_tx_ip(struct mbuf *m, uint8_t proto, uint32_t daddr)
 {
+    return net_tx_ip_prio(m, proto, daddr, 0);
+}
+
+/**
+ * net_tx_ip_prio - transmits an IP packet at a particular priority level
+ * @prio: the priority level (must be less than 8)
+ *
+ * See @net_tx_ip for more information.
+ */
+int net_tx_ip_prio(struct mbuf *m, uint8_t proto, uint32_t daddr, uint8_t prio)
+{
 	struct eth_addr dhost;
 	int ret;
 
 	/* prepend the IP header */
-	net_push_iphdr(m, proto, daddr);
+	net_push_iphdr(m, proto, daddr, prio);
 
 	/* ask NIC to calculate IP checksum */
 	m->txflags |= OLFLAG_IP_CHKSUM | OLFLAG_IPV4;
@@ -468,7 +481,7 @@ int net_tx_ip_burst(struct mbuf **ms, int n, uint8_t proto, uint32_t daddr)
 	/* prepare the mbufs */
 	for (i = 0; i < n; i++) {
 		/* prepend the IP header */
-		net_push_iphdr(ms[i], proto, daddr);
+		net_push_iphdr(ms[i], proto, daddr, 0);
 
 		/* ask NIC to calculate IP checksum */
 		ms[i]->txflags |= OLFLAG_IP_CHKSUM | OLFLAG_IPV4;

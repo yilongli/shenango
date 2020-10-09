@@ -257,9 +257,10 @@ void net_rx_trans(struct mbuf **ms, const unsigned int nr)
 {
 	int i;
 	const struct ip_hdr *iphdr;
-	bool is_homa_pkt;
+	bool is_homa_pkt, has_homa_pkt;
 
 	/* deliver each packet to a L4 protocol handler */
+	has_homa_pkt = false;
 	for (i = 0; i < nr; i++) {
 		struct mbuf *m = ms[i];
 		struct trans_entry *e;
@@ -277,7 +278,13 @@ void net_rx_trans(struct mbuf **ms, const unsigned int nr)
             }
             e->ops->recv(e, m);
 		}
+		has_homa_pkt |= is_homa_pkt;
 		rcu_read_unlock();
+	}
+
+	/* invoke end-of-batch handlers of L4 protocols */
+	if (has_homa_pkt) {
+	    homa_trans_try_grant(homa);
 	}
 }
 
